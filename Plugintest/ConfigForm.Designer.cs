@@ -43,28 +43,28 @@
             this.label1.TabIndex = 0;
             this.label1.Text = "COM Port:";
             // 
-            // comPortCombo
+            // portName
             // 
             this.portName.FormattingEnabled = true;
             this.portName.Location = new System.Drawing.Point(109, 16);
-            this.portName.Name = "comPortCombo";
+            this.portName.Name = "portName";
             this.portName.Size = new System.Drawing.Size(229, 28);
             this.portName.TabIndex = 1;
             // 
             // label2
             // 
             this.label2.AutoSize = true;
-            this.label2.Location = new System.Drawing.Point(16, 71);
+            this.label2.Location = new System.Drawing.Point(12, 71);
             this.label2.Name = "label2";
             this.label2.Size = new System.Drawing.Size(60, 20);
             this.label2.TabIndex = 2;
             this.label2.Text = "Status:";
             // 
-            // commsStatus
+            // portStatus
             // 
             this.portStatus.AutoSize = true;
             this.portStatus.Location = new System.Drawing.Point(105, 71);
-            this.portStatus.Name = "commsStatus";
+            this.portStatus.Name = "portStatus";
             this.portStatus.Size = new System.Drawing.Size(14, 20);
             this.portStatus.TabIndex = 3;
             this.portStatus.Text = "-";

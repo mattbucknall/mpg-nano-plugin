@@ -14,37 +14,45 @@ namespace Plugins
             CLOSED,
             OK,
             OPEN_ERROR,
-            NO_RESPONSE
+            TIMEOUT,
+            BAD_RESPONSE
         };
 
+        private enum MpgAxis
+        {
+            AXIS_OFF,
+            AXIS_X,
+            AXIS_Y,
+            AXIS_Z,
+            AXIS_4
+        }
+
+        private enum MpgStep
+        {
+            STEP_X1,
+            STEP_X10,
+            STEP_X100,
+            STEP_X1000
+        }
+
         private static Regex mPortNameRegex = new Regex(@"^COM\d+$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private static double[] mStepSizes = { 0.001, 0.01, 0.1, 1.0 };
 
         public Plugininterface.Entry UC;
         private bool mPortChanged;
         private string mPortName;
         private PortStatus mPortStatus;
+        private Int16 mMpgDelta;
+        private bool mMpgHaveEStop;
+        private MpgAxis mMpgAxis;
+        private MpgStep mMpgStep;
         private SerialPort mPort = new SerialPort();
         private ConfigForm mConfigForm;
          
         public UCCNCplugin()
         {
             // empty
-        }
-
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if ( mPort.IsOpen )
-            {
-                try
-                {
-                    mPort.Close();
-                }
-                catch(Exception)
-                {
-                    // empty
-                }
-            }
         }
 
 
@@ -152,12 +160,16 @@ namespace Plugins
                         statusText = "OK";
                         break;
 
-                    case PortStatus.NO_RESPONSE:
-                        statusText = "NO RESPONSE";
-                        break;
-
                     case PortStatus.OPEN_ERROR:
                         statusText = "OPEN ERROR";
+                        break;
+
+                    case PortStatus.TIMEOUT:
+                        statusText = "TIMEOUT";
+                        break;
+
+                    case PortStatus.BAD_RESPONSE:
+                        statusText = "BAD RESPONSE";
                         break;
 
                     default:
@@ -172,24 +184,84 @@ namespace Plugins
         //Called from UCCNC when the plugin is loaded and started.
         public void Startup_event()
         {
-            
+            // empty
         }
 
         //Called when the Pluginshowup(string Pluginfilename); function is executed in the UCCNC.
         public void Showup_event()
         {
-           
+           // empty
         }
 
         //Called when the UCCNC software is closing.
         public void Shutdown_event()
         {
-            try
+            if (mPort.IsOpen)
             {
-                
+                try
+                {
+                    mPort.Close();
+                    mPortName = "";
+                }
+                catch (Exception)
+                {
+                    // empty
+                }
             }
-            catch (Exception) { }
         }
+
+        private void ReqMpgReset()
+        {
+            mPort.Write("R");
+
+            if (mPort.ReadLine() != "[R]\r" )
+            {
+                throw new InvalidOperationException();
+            }
+        }
+
+
+        private void ReqMpgState()
+        {
+            string response;
+
+            mPort.Write("S");
+
+            response = mPort.ReadLine();
+
+            if ( response.Length == 10 && response[0] == '[' && response[1] == 'S' && response[8] == ']')
+            {
+               UInt32 word = 0;
+
+                for(var i = 2; i < 8; i++)
+                {
+                    var c = (byte) response[i];
+
+                    if ( c >= '0' && c <= '9' )
+                    {
+                        word = (word * 16) | (UInt32) (c - 48);
+                    }
+                    else if ( c >= 'A' && c <= 'F' )
+                    {
+                        word = (word * 16) | (UInt32) (c - 55);
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException();
+                    }
+                }
+
+                mMpgAxis = (MpgAxis)(word & (UInt32) 0x7);
+                mMpgStep = (MpgStep)((word >> 3) & (UInt32)0x3);
+                mMpgDelta = (Int16)((word & (UInt32)0xFFFF00) >> 8);
+                mMpgHaveEStop = ((word & (UInt32)(1 << 5)) != 0);
+            }
+            else
+            {
+                throw new InvalidOperationException();
+            }
+        }
+
 
         //Called in a loop with a 25Hz interval.
         public void Loop_event() 
@@ -207,18 +279,63 @@ namespace Plugins
                 mPort.PortName = mPortName;
             }
 
-            if ( !mPort.IsOpen && mPortName.Length > 0 )
+            try
             {
-                mPort.PortName = mPortName;
+                bool haveEStop = UC.GetLED(25);
+                bool haveCycle = UC.GetLED(54);
 
-                try
+                if (!mPort.IsOpen && mPortName.Length > 0)
                 {
+                    mPort.PortName = mPortName;
+
                     mPort.Open();
+                    mPort.DiscardInBuffer();
+                    mPort.DiscardOutBuffer();
+
+                    ReqMpgReset();
+
                     updateStatus(PortStatus.OK);
                 }
-                catch (Exception)
+
+                ReqMpgState();
+
+                if ( mMpgHaveEStop )
                 {
-                    updateStatus(PortStatus.OPEN_ERROR);
+                    UC.Callbutton(512);
+                }
+                else if ( mMpgAxis != MpgAxis.AXIS_OFF && !haveEStop && !haveCycle )
+                {
+                    int axis = (int)mMpgAxis - 1;
+                    double step = mStepSizes[(int)mMpgStep];
+                    int delta = (int)mMpgDelta;
+
+                    if ( delta > 0 )
+                    {
+                        UC.AddLinearMoveRel(axis, step, delta, 100.0, false);
+                    }
+                    else if ( delta < 0 )
+                    {
+                        UC.AddLinearMoveRel(axis, step, -delta, 100.0, true);
+                    }
+                }
+            }
+            catch(TimeoutException)
+            {
+                updateStatus(PortStatus.TIMEOUT);
+            }
+            catch(InvalidOperationException)
+            {
+                updateStatus(PortStatus.BAD_RESPONSE);
+            }
+            catch (Exception)
+            {
+                updateStatus(PortStatus.OPEN_ERROR);
+            }
+            finally
+            {
+                if ( mPortStatus != PortStatus.OK )
+                {
+                    mPort.Close();
                 }
             }
         }
